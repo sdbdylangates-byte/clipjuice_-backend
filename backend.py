@@ -1,7 +1,16 @@
-from fastapi import FastAPI, UploadFile, File
+ from fastapi import FastAPI, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
 import os
 
 web_app = FastAPI()
+
+# This is the "permission slip" that allows your frontend to talk to your backend
+web_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all websites to talk to your API
+    allow_methods=["*"],  # Allows all actions (GET, POST, etc.)
+    allow_headers=["*"],  # Allows all headers
+)
 
 # Create an 'uploads' folder on the server
 UPLOAD_DIR = "uploads"
