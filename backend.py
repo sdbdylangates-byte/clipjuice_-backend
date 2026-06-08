@@ -1,8 +1,12 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 import ffmpeg
+import imageio_ffmpeg
 import os
 import shutil
 import uuid
+
+# 1. Get the path to the internal ffmpeg binary
+ffmpeg_bin = imageio_ffmpeg.get_ffmpeg_exe()
 
 web_app = FastAPI()
 
@@ -12,11 +16,10 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 @web_app.get("/")
 def read_root():
-    return {"status": "Video processing server is live!"}
+    return {"status": "Video processing server is live and ready!"}
 
 @web_app.post("/process-video")
 async def process_video(file: UploadFile = File(...)):
-    # 1. Generate unique names to prevent file overwrites
     input_filename = f"{uuid.uuid4()}_{file.filename}"
     output_filename = f"processed_{uuid.uuid4()}.mp4"
     
@@ -24,29 +27,25 @@ async def process_video(file: UploadFile = File(...)):
     output_path = os.path.join(UPLOAD_DIR, output_filename)
 
     try:
-        # 2. Save the uploaded file to disk
+        # Save the uploaded file
         with open(input_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # 3. Process with ffmpeg-python
-        # Example: Resizing to 720p
+        # Process with ffmpeg-python using the internal binary
+        # We pass cmd=ffmpeg_bin to ensure it uses the file we installed via pip
         (
             ffmpeg
             .input(input_path)
             .output(output_path, vf="scale=-1:720")
-            .run(overwrite_output=True)
+            .run(cmd=ffmpeg_bin, overwrite_output=True)
         )
 
-        # 4. (Optional) In a real app, you would upload the file to cloud storage (S3/GCS) here.
-        # For now, we return a success message.
-        return {"message": "Video processed successfully", "output": output_filename}
+        return {"message": "Video processed successfully", "file": output_filename}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
 
     finally:
-        # 5. Cleanup: Delete temporary files to keep server storage clean
+        # Cleanup
         if os.path.exists(input_path):
             os.remove(input_path)
-        # Note: In a production app, keep the output file if the user needs to download it.
-        # If you want to return the file, use FastAPI's FileResponse here.
