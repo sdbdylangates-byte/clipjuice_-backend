@@ -30,14 +30,14 @@ def cleanup(file_path):
 # --- Routes ---
 @web_app.get("/")
 def read_root():
-    return {"status": "ListingFlow Engine is active."}
+    return {"status": "ListingFlow Cinematic Engine is active and denoising enabled."}
 
 @web_app.post("/process-video")
 async def process_video(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     logo: UploadFile = File(None),
-    option: str = Form("720p")
+    option: str = Form("cinematic")
 ):
     uid = uuid.uuid4()
     input_path = os.path.join(UPLOAD_DIR, f"{uid}_{file.filename}")
@@ -48,14 +48,16 @@ async def process_video(
         shutil.copyfileobj(file.file, buffer)
 
     try:
-        # Start FFmpeg pipeline
-        stream = ffmpeg.input(input_path)
+        # Input stream
+        input_stream = ffmpeg.input(input_path)
+        
+        # 1. Video Pipeline: Stabilization + Cinematic Zoom
+        video_stream = input_stream.video.filter('deshake')
+        video_stream = video_stream.filter('zoompan', zoom='min(zoom+0.0015,1.25)', d=125, s='720x1280', fps=30)
 
-        # 1. Stabilization (Deshake) - Cleans up shaky handheld footage
-        stream = stream.filter('deshake')
-
-        # 2. Cinematic Zoom (Ken Burns Effect) - Adds motion and vertical crop (9:16)
-        stream = stream.filter('zoompan', zoom='min(zoom+0.0015,1.25)', d=125, s='720x1280', fps=30)
+        # 2. Audio Pipeline: Noise Reduction (afftdn)
+        # 'nr' (noise reduction) set to 10dB, 'nf' (noise floor) set to -25dB
+        audio_stream = input_stream.audio.filter('afftdn', nr=10, nf=-25)
 
         # 3. Branding (Logo Overlay)
         if logo:
@@ -64,19 +66,27 @@ async def process_video(
                 shutil.copyfileobj(logo.file, buffer)
             
             logo_input = ffmpeg.input(logo_path)
-            # Overlay at bottom-right corner with 10px padding
-            stream = stream.overlay(logo_input, x='main_w-overlay_w-10', y='main_h-overlay_h-10')
+            video_stream = video_stream.overlay(logo_input, x='main_w-overlay_w-10', y='main_h-overlay_h-10')
             background_tasks.add_task(cleanup, logo_path)
 
-        # 4. Final Output
-        stream = stream.output(output_path, vcodec='libx264', crf=23, preset='veryfast')
-        stream.run(cmd=ffmpeg_bin, overwrite_output=True)
+        # 4. Combine and Output
+        out = ffmpeg.output(
+            video_stream, 
+            audio_stream, 
+            output_path, 
+            vcodec='libx264', 
+            acodec='aac',
+            crf=23, 
+            preset='veryfast'
+        )
+        
+        out.run(cmd=ffmpeg_bin, overwrite_output=True)
 
         # Cleanup
         cleanup(input_path)
         background_tasks.add_task(cleanup, output_path)
 
-        return FileResponse(output_path, media_type='video/mp4', filename='listing_pro.mp4')
+        return FileResponse(output_path, media_type='video/mp4', filename='listing_cinematic.mp4')
 
     except Exception as e:
         if os.path.exists(input_path): cleanup(input_path)
