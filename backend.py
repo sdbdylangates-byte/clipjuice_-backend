@@ -1,96 +1,55 @@
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, HTTPException
-from fastapi.responses import FileResponse
-from fastapi.middleware.cors import CORSMiddleware
-import ffmpeg
-import imageio_ffmpeg
+from fastapi import FastAPI, UploadFile, File
+from supabase import create_client
 import os
-import shutil
-import uuid
-
-# --- Initialize App ---
-web_app = FastAPI()
-
-# --- Middleware ---
-web_app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # --- Configuration ---
-UPLOAD_DIR = "temp_uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-ffmpeg_bin = imageio_ffmpeg.get_ffmpeg_exe()
+# 1. Your Supabase URL (already have this)
+SUPABASE_URL = "https://vrjyrxdorzttiuvjltou.supabase.co"
 
-def cleanup(file_path):
-    if os.path.exists(file_path):
-        os.remove(file_path)
+# 2. IMPORTANT: Paste your 'anon' public key here
+# You can find this in your Supabase Dashboard -> Settings -> API
+SUPABASE_KEY = "PASTE_YOUR_ANON_PUBLIC_KEY_HERE"
+
+# --- Initialize ---
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+app = FastAPI()
 
 # --- Routes ---
-@web_app.get("/")
+
+@app.get("/")
 def read_root():
-    return {"status": "ListingFlow Cinematic Engine is active (Optimized for RAM)."}
+    """Simple check to ensure server is running"""
+    return {"message": "ListingFlow Backend is online and connected to Supabase!"}
 
-@web_app.post("/process-video")
-async def process_video(
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    logo: UploadFile = File(None),
-    option: str = Form("cinematic")
-):
-    uid = uuid.uuid4()
-    input_path = os.path.join(UPLOAD_DIR, f"{uid}_{file.filename}")
-    output_path = os.path.join(UPLOAD_DIR, f"processed_{uid}.mp4")
-
-    # Save uploaded file
-    with open(input_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
+@app.post("/process-video")
+async def process_video(file: UploadFile = File(...)):
+    """
+    Receives the video file, creates a job ticket in the database,
+    and returns the Job ID to the user.
+    """
     try:
-        # Input stream
-        input_stream = ffmpeg.input(input_path)
+        # 1. Define the initial job state
+        job_data = {"status": "pending"}
         
-        # 1. Video Pipeline (Optimized for Memory)
-        # We scale to 1280x720 FIRST. This drastically reduces RAM usage for the following filters.
-        video_stream = input_stream.video.filter('scale', w=1280, h=720)
+        # 2. Insert into Supabase 'video_jobs' table
+        response = supabase.table("video_jobs").insert(job_data).execute()
         
-        # Now apply heavy filters on the scaled stream
-        video_stream = video_stream.filter('deshake')
-        video_stream = video_stream.filter('zoompan', zoom='min(zoom+0.0015,1.25)', d=125, s='720x1280', fps=30)
-
-        # 2. Audio Pipeline: Noise Reduction (afftdn)
-        audio_stream = input_stream.audio.filter('afftdn', nr=10, nf=-25)
-
-        # 3. Branding (Logo Overlay)
-        if logo:
-            logo_path = os.path.join(UPLOAD_DIR, f"logo_{uid}.png")
-            with open(logo_path, "wb") as buffer:
-                shutil.copyfileobj(logo.file, buffer)
-            
-            logo_input = ffmpeg.input(logo_path)
-            video_stream = video_stream.overlay(logo_input, x='main_w-overlay_w-10', y='main_h-overlay_h-10')
-            background_tasks.add_task(cleanup, logo_path)
-
-        # 4. Combine and Output
-        out = ffmpeg.output(
-            video_stream, 
-            audio_stream, 
-            output_path, 
-            vcodec='libx264', 
-            acodec='aac',
-            crf=23, 
-            preset='veryfast' # 'veryfast' further reduces CPU/Memory spike
-        )
+        # 3. Extract the new ID
+        job_id = response.data[0]['id']
         
-        out.run(cmd=ffmpeg_bin, overwrite_output=True)
-
-        # Cleanup
-        cleanup(input_path)
-        background_tasks.add_task(cleanup, output_path)
-
-        return FileResponse(output_path, media_type='video/mp4', filename='listing_cinematic.mp4')
-
+        # 4. Return success message with the tracking ID
+        return {
+            "message": "Job accepted", 
+            "job_id": job_id, 
+            "status": "pending"
+        }
+        
     except Exception as e:
-        if os.path.exists(input_path): cleanup(input_path)
-        raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
+        # If something goes wrong, return the error
+        return {"error": f"Database failure: {str(e)}"}
+
+# --- Start the Server ---
+if __name__ == "__main__":
+    import uvicorn
+    # This runs your server when you type 'python backend.py'
+    uvicorn.run(app, host="0.0.0.0", port=8000)
