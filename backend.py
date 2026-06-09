@@ -30,7 +30,7 @@ def cleanup(file_path):
 # --- Routes ---
 @web_app.get("/")
 def read_root():
-    return {"status": "ListingFlow Cinematic Engine is active and denoising enabled."}
+    return {"status": "ListingFlow Cinematic Engine is active (Optimized for RAM)."}
 
 @web_app.post("/process-video")
 async def process_video(
@@ -51,12 +51,15 @@ async def process_video(
         # Input stream
         input_stream = ffmpeg.input(input_path)
         
-        # 1. Video Pipeline: Stabilization + Cinematic Zoom
-        video_stream = input_stream.video.filter('deshake')
+        # 1. Video Pipeline (Optimized for Memory)
+        # We scale to 1280x720 FIRST. This drastically reduces RAM usage for the following filters.
+        video_stream = input_stream.video.filter('scale', w=1280, h=720)
+        
+        # Now apply heavy filters on the scaled stream
+        video_stream = video_stream.filter('deshake')
         video_stream = video_stream.filter('zoompan', zoom='min(zoom+0.0015,1.25)', d=125, s='720x1280', fps=30)
 
         # 2. Audio Pipeline: Noise Reduction (afftdn)
-        # 'nr' (noise reduction) set to 10dB, 'nf' (noise floor) set to -25dB
         audio_stream = input_stream.audio.filter('afftdn', nr=10, nf=-25)
 
         # 3. Branding (Logo Overlay)
@@ -77,7 +80,7 @@ async def process_video(
             vcodec='libx264', 
             acodec='aac',
             crf=23, 
-            preset='veryfast'
+            preset='veryfast' # 'veryfast' further reduces CPU/Memory spike
         )
         
         out.run(cmd=ffmpeg_bin, overwrite_output=True)
